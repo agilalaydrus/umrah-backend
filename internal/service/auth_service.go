@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9" // [NEW] Import Redis
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -23,11 +25,16 @@ type AuthService interface {
 }
 
 type authService struct {
-	repo repository.UserRepository
+	repo        repository.UserRepository
+	redisClient *redis.Client // [NEW] Inject Redis Client
 }
 
-func NewAuthService(repo repository.UserRepository) AuthService {
-	return &authService{repo: repo}
+// [UPDATED] Constructor now requires Redis Client
+func NewAuthService(repo repository.UserRepository, rc *redis.Client) AuthService {
+	return &authService{
+		repo:        repo,
+		redisClient: rc,
+	}
 }
 
 func (s *authService) Register(req entity.RegisterDTO) (*entity.User, error) {
@@ -60,11 +67,31 @@ func (s *authService) Login(req entity.LoginDTO) (string, error) {
 		return "", errors.New("invalid credentials")
 	}
 
+	// --- [NEW] SINGLE SESSION LOGIC START ---
+
+	// 1. Generate a unique Session ID
+	sessionID := uuid.New().String()
+
+	// 2. Save to Redis (Key: "session:user:{USER_ID}")
+	// This overwrites any previous session ID, effectively logging out the old device.
+	redisKey := fmt.Sprintf("session:user:%s", user.ID.String())
+
+	// Note: using context.Background() here to match your interface signature
+	err = s.redisClient.Set(context.Background(), redisKey, sessionID, 72*time.Hour).Err()
+	if err != nil {
+		return "", fmt.Errorf("failed to create session: %v", err)
+	}
+
+	// 3. Create Claims (Includes "sid")
 	claims := jwt.MapClaims{
 		"user_id": user.ID,
 		"role":    user.Role,
+		"sid":     sessionID, // [NEW] Embed Session ID in token
 		"exp":     time.Now().Add(time.Hour * 72).Unix(),
 	}
+
+	// --- SINGLE SESSION LOGIC END ---
+
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(os.Getenv("JWT_SECRET")))
 }

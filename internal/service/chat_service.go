@@ -14,10 +14,7 @@ import (
 
 type ChatService interface {
 	SendMessage(ctx context.Context, groupID, senderID, content, msgType string) (*entity.Message, error)
-
-	// Update Signature: Tambah ctx dan beforeID
 	GetHistory(ctx context.Context, groupID string, beforeID string) ([]entity.Message, error)
-
 	GetRedisPubSub(groupID string) *redis.PubSub
 	DeleteMessage(ctx context.Context, groupID, messageID, userID string) error
 }
@@ -42,8 +39,8 @@ func (s *chatService) SendMessage(ctx context.Context, groupID, senderID, conten
 		Type:     entity.MessageType(msgType),
 	}
 
-	// [FIX] Pass 'ctx' ke repository
-	if err := s.repo.Create(ctx, msg); err != nil {
+	// REFACTORED: Create -> CreateMessage
+	if err := s.repo.CreateMessage(ctx, msg); err != nil {
 		return nil, err
 	}
 
@@ -55,9 +52,8 @@ func (s *chatService) SendMessage(ctx context.Context, groupID, senderID, conten
 }
 
 func (s *chatService) GetHistory(ctx context.Context, groupID string, beforeID string) ([]entity.Message, error) {
-	// [FIX] Pass 'ctx' dan 'beforeID'
-	// Kita set limit hardcode 50 pesan per load
-	return s.repo.GetHistory(ctx, groupID, 50, beforeID)
+	// REFACTORED: GetHistory -> GetMessageHistory
+	return s.repo.GetMessageHistory(ctx, groupID, 50, beforeID)
 }
 
 func (s *chatService) GetRedisPubSub(groupID string) *redis.PubSub {
@@ -65,34 +61,24 @@ func (s *chatService) GetRedisPubSub(groupID string) *redis.PubSub {
 	return s.redisClient.Subscribe(context.Background(), channel)
 }
 
-// Implementasi "Smart Backend" untuk Delete
 func (s *chatService) DeleteMessage(ctx context.Context, groupID, messageID, userID string) error {
-	// 1. AMBIL DATA ASLI (LENGKAP)
-	// Agar Frontend menerima object utuh (Nama, Foto, Timestamp asli)
-	originalMsg, err := s.repo.FindByID(ctx, messageID)
+	// REFACTORED: FindByID -> FindMessageByID
+	originalMsg, err := s.repo.FindMessageByID(ctx, messageID)
 	if err != nil {
 		return err
 	}
 
-	// Validasi kepemilikan
 	if originalMsg.SenderID.String() != userID {
 		return errors.New("anda bukan pemilik pesan ini")
 	}
 
-	// 2. HAPUS DI DATABASE (Soft Delete)
-	// Status di DB berubah jadi DELETED, content jadi "Pesan dihapus"
 	if err := s.repo.DeleteMessage(ctx, messageID, userID); err != nil {
 		return err
 	}
 
-	// 3. MANIPULASI OBJECT UNTUK BROADCAST
-	// Kita pakai object asli yg datanya lengkap tadi, tapi kita ubah isinya
-	// sebelum dikirim ke Redis/Frontend.
 	originalMsg.Content = "🚫 Pesan ini telah dihapus"
 	originalMsg.Type = entity.MsgDeleted
 
-	// 4. BROADCAST KE REDIS
-	// Frontend akan terima JSON lengkap. ID sama, Sender ada, tapi isinya "Pesan dihapus".
 	msgJSON, _ := json.Marshal(originalMsg)
 	channel := fmt.Sprintf("chat:group:%s", groupID)
 
