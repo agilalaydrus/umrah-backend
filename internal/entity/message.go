@@ -10,10 +10,11 @@ import (
 type MessageType string
 
 const (
-	MsgText    MessageType = "TEXT"
-	MsgSOS     MessageType = "SOS"
-	MsgInfo    MessageType = "INFO"
-	MsgDeleted MessageType = "DELETED" // [BARU] Tambahkan ini
+	MsgText      MessageType = "TEXT"
+	MsgSOS       MessageType = "SOS"
+	MsgInfo      MessageType = "INFO"
+	MsgDeleted   MessageType = "DELETED"
+	MsgBroadcast MessageType = "BROADCAST" // [NEW] Admin/Mutawwif to All
 )
 
 type Message struct {

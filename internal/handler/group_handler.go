@@ -31,7 +31,8 @@ func (h *GroupHandler) Create(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid body"})
 	}
 
-	group, err := h.svc.CreateGroup(userID, role, req)
+	// [FIX] Tambahkan c.Context() sebagai parameter pertama
+	group, err := h.svc.CreateGroup(c.Context(), userID, role, req)
 	if err != nil {
 		return c.Status(403).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -47,7 +48,8 @@ func (h *GroupHandler) Join(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid body"})
 	}
 
-	group, err := h.svc.JoinGroup(userID, req)
+	// [FIX] Tambahkan c.Context()
+	group, err := h.svc.JoinGroup(c.Context(), userID, req)
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -57,7 +59,9 @@ func (h *GroupHandler) Join(c *fiber.Ctx) error {
 
 func (h *GroupHandler) GetMembers(c *fiber.Ctx) error {
 	groupID := c.Params("id")
-	members, err := h.svc.GetGroupMembers(groupID)
+
+	// [FIX] Tambahkan c.Context()
+	members, err := h.svc.GetGroupMembers(c.Context(), groupID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
