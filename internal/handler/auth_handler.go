@@ -17,7 +17,6 @@ func NewAuthHandler(svc service.AuthService) *AuthHandler {
 	return &AuthHandler{svc: svc, validator: validator.New()}
 }
 
-// Validation Helper
 func (h *AuthHandler) validate(req interface{}) string {
 	if err := h.validator.Struct(req); err != nil {
 		return err.Error()
@@ -34,7 +33,8 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": errStr})
 	}
 
-	user, err := h.svc.Register(req)
+	// [FIX] Pass c.Context() here
+	user, err := h.svc.Register(c.Context(), req)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -51,7 +51,8 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": errStr})
 	}
 
-	token, err := h.svc.Login(req)
+	// [FIX] Pass c.Context() here
+	token, err := h.svc.Login(c.Context(), req)
 	if err != nil {
 		return c.Status(401).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -65,7 +66,8 @@ func (h *AuthHandler) ForgotPassword(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid body"})
 	}
 
-	otp, err := h.svc.ForgotPassword(req)
+	// [FIX] Pass c.Context() here
+	otp, err := h.svc.ForgotPassword(c.Context(), req)
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -82,7 +84,8 @@ func (h *AuthHandler) ResetPassword(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": errStr})
 	}
 
-	if err := h.svc.ResetPassword(req); err != nil {
+	// [FIX] Pass c.Context() here
+	if err := h.svc.ResetPassword(c.Context(), req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 

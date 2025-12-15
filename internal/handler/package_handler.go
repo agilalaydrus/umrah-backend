@@ -5,7 +5,6 @@ import (
 	"umrah-backend/internal/service"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/golang-jwt/jwt/v5"
 )
 
 type PackageHandler struct {
@@ -40,19 +39,21 @@ func (h *PackageHandler) GetList(c *fiber.Ctx) error {
 
 // POST /bookings
 func (h *PackageHandler) Book(c *fiber.Ctx) error {
-	user := c.Locals("user").(*jwt.Token)
-	claims := user.Claims.(jwt.MapClaims)
-	userID := claims["user_id"].(string)
+	userID, err := getUserID(c) // Gunakan Helper
+	if err != nil {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 
 	var req struct {
 		PackageID string `json:"package_id"`
-		RoomType  string `json:"room_type"` // QUAD, TRIPLE, DOUBLE
+		RoomType  string `json:"room_type"`
 		PaxCount  int    `json:"pax_count"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
 	}
 
+	// Pass c.Context()
 	booking, err := h.svc.BookPackage(c.Context(), userID, req.PackageID, req.RoomType, req.PaxCount)
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})

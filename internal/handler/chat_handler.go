@@ -36,14 +36,16 @@ func (h *ChatHandler) GetHistory(c *fiber.Ctx) error {
 }
 
 func (h *ChatHandler) DeleteMessage(c *fiber.Ctx) error {
-	userToken := c.Locals("user").(*jwt.Token)
-	claims := userToken.Claims.(jwt.MapClaims)
-	userID := claims["user_id"].(string)
+	userID, err := getUserID(c)
+	if err != nil {
+		return c.Status(401).JSON(fiber.Map{"error": "Unauthorized"})
+	}
 
 	groupID := c.Params("group_id")
 	messageID := c.Params("message_id")
 
-	err := h.svc.DeleteMessage(c.Context(), groupID, messageID, userID)
+	// Pass c.Context()
+	err = h.svc.DeleteMessage(c.Context(), groupID, messageID, userID)
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}

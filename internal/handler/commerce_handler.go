@@ -76,9 +76,11 @@ func (h *CommerceHandler) GetMyOrders(c *fiber.Ctx) error {
 
 // POST /orders/:id/proof (Upload Image)
 func (h *CommerceHandler) UploadProof(c *fiber.Ctx) error {
-	user := c.Locals("user").(*jwt.Token)
-	claims := user.Claims.(jwt.MapClaims)
-	userID := claims["user_id"].(string)
+	userID, err := getUserID(c) // Gunakan Helper
+	if err != nil {
+		return c.Status(401).JSON(fiber.Map{"error": err.Error()})
+	}
+
 	orderID := c.Params("id")
 
 	// 1. Handle File Upload
@@ -87,9 +89,25 @@ func (h *CommerceHandler) UploadProof(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Image required"})
 	}
 
-	// 2. Save File Locally (In Production: Use S3)
-	// Make sure 'uploads' folder exists in your project root!
-	filename := fmt.Sprintf("%s_%s%s", userID, uuid.New().String(), filepath.Ext(file.Filename))
+	// [SECURITY FIX] Validasi MIME Type / Ekstensi
+	allowedTypes := map[string]bool{
+		"image/jpeg": true,
+		"image/png":  true,
+		"image/jpg":  true,
+	}
+	contentType := file.Header.Get("Content-Type")
+	if !allowedTypes[contentType] {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid file type. Only JPG/PNG allowed"})
+	}
+
+	// [SECURITY FIX] Batasi ukuran file (misal max 2MB)
+	if file.Size > 2*1024*1024 {
+		return c.Status(400).JSON(fiber.Map{"error": "File size too large (max 2MB)"})
+	}
+
+	// 2. Save File Locally
+	ext := filepath.Ext(file.Filename)
+	filename := fmt.Sprintf("%s_%s%s", userID, uuid.New().String(), ext)
 	savePath := fmt.Sprintf("./uploads/%s", filename)
 
 	if err := c.SaveFile(file, savePath); err != nil {
@@ -97,8 +115,8 @@ func (h *CommerceHandler) UploadProof(c *fiber.Ctx) error {
 	}
 
 	// 3. Call Service
-	// We store the relative path or full URL
 	publicURL := fmt.Sprintf("/uploads/%s", filename)
+	// Pass c.Context()
 	if err := h.svc.UploadPaymentProof(c.Context(), orderID, publicURL, userID); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}

@@ -27,7 +27,7 @@ func NewPackageService(repo repository.PackageRepository) PackageService {
 func (s *packageService) CreatePackage(ctx context.Context, req entity.TravelPackage) error {
 	req.ID = uuid.New()
 	req.CreatedAt = time.Now()
-	req.Available = req.Quota // Initial available = quota
+	req.Available = req.Quota
 	return s.repo.CreatePackage(ctx, &req)
 }
 
@@ -36,18 +36,13 @@ func (s *packageService) GetList(ctx context.Context, category string) ([]entity
 }
 
 func (s *packageService) BookPackage(ctx context.Context, userID, packageID, roomType string, pax int) (*entity.Booking, error) {
-	// 1. Get Package
+	// 1. Get Package Data (Read Only, for Pricing)
 	pkg, err := s.repo.FindPackageByID(ctx, packageID)
 	if err != nil {
 		return nil, errors.New("package not found")
 	}
 
-	// 2. Check Quota
-	if pkg.Available < pax {
-		return nil, errors.New("not enough seats available")
-	}
-
-	// 3. Calculate Price based on Room Type
+	// 2. Calculate Price
 	var pricePerPax float64
 	switch roomType {
 	case "QUAD":
@@ -57,12 +52,12 @@ func (s *packageService) BookPackage(ctx context.Context, userID, packageID, roo
 	case "DOUBLE":
 		pricePerPax = pkg.PriceDouble
 	default:
-		return nil, errors.New("invalid room type (QUAD/TRIPLE/DOUBLE)")
+		return nil, errors.New("invalid room type")
 	}
 
 	totalPrice := pricePerPax * float64(pax)
 
-	// 4. Create Booking
+	// 3. Create Booking Object
 	booking := &entity.Booking{
 		ID:         uuid.New(),
 		UserID:     uuid.MustParse(userID),
@@ -74,13 +69,20 @@ func (s *packageService) BookPackage(ctx context.Context, userID, packageID, roo
 		CreatedAt:  time.Now(),
 	}
 
-	if err := s.repo.CreateBooking(ctx, booking); err != nil {
-		return nil, err
+	// 4. [ATOMIC] Deduct Quota FIRST
+	// Kita kurangi dulu kuotanya menggunakan Query UPDATE atomic.
+	// Jika return error (rows affected 0), berarti kuota habis.
+	if err := s.repo.DecreaseQuota(ctx, pkg.ID.String(), pax); err != nil {
+		return nil, errors.New("booking failed: not enough seats available")
 	}
 
-	// 5. Deduct Quota (Simple logic, add mutex/transaction for high concurrency)
-	pkg.Available -= pax
-	_ = s.repo.UpdatePackageQuota(ctx, pkg)
+	// 5. Save Booking
+	// Jika save booking gagal, idealnya kita rollback kuota (increase).
+	// Tapi untuk MVP, urutan ini lebih aman daripada Overselling.
+	if err := s.repo.CreateBooking(ctx, booking); err != nil {
+		// TODO: Rollback quota here (IncreaseQuota)
+		return nil, err
+	}
 
 	return booking, nil
 }
