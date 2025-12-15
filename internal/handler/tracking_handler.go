@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context" // [FIX] Import context
 	"log"
 	"time"
 	"umrah-backend/internal/service"
@@ -18,20 +19,15 @@ func NewTrackingHandler(svc service.TrackingService) *TrackingHandler {
 	return &TrackingHandler{svc: svc}
 }
 
-// Struct untuk membaca data JSON dari HP Jamaah
 type LocationPayload struct {
 	Lat  float64 `json:"lat"`
 	Long float64 `json:"long"`
 }
 
-// WEBSOCKET: Stream Location (Write)
 func (h *TrackingHandler) StreamLocation(c *websocket.Conn) {
-	// 1. Ambil User info dari Token JWT
 	user := c.Locals("user").(*jwt.Token)
 	claims := user.Claims.(jwt.MapClaims)
 	userID := claims["user_id"].(string)
-
-	// 2. Ambil Group ID dari URL
 	groupID := c.Params("group_id")
 
 	log.Printf("Start Tracking: User %s in Group %s", userID, groupID)
@@ -40,35 +36,31 @@ func (h *TrackingHandler) StreamLocation(c *websocket.Conn) {
 
 	for {
 		var payload LocationPayload
-
-		// 3. Baca JSON dari Client (HP)
 		if err := c.ReadJSON(&payload); err != nil {
 			log.Println("WS Disconnected:", userID)
 			break
 		}
 
-		// 4. Siapkan Data untuk Service [FIX: Bungkus jadi struct]
 		locationData := service.LocationData{
 			UserID:    userID,
 			Latitude:  payload.Lat,
 			Longitude: payload.Long,
-			Timestamp: time.Now().UnixMilli(), // Tambahkan waktu server
+			Timestamp: time.Now().UnixMilli(),
 		}
 
-		// 5. Panggil Service UpdateLocation [FIX: Hapus context, kirim struct]
-		err := h.svc.UpdateLocation(groupID, locationData)
+		// [FIX] Use context.Background() because this is a WebSocket loop
+		err := h.svc.UpdateLocation(context.Background(), groupID, locationData)
 		if err != nil {
 			log.Println("Redis Save Error:", err)
 		}
 	}
 }
 
-// HTTP: Get Map Markers (Read)
 func (h *TrackingHandler) GetLocations(c *fiber.Ctx) error {
 	groupID := c.Params("group_id")
 
-	// Panggil Service GetGroupLocations [FIX: Hapus c.Context()]
-	locations, err := h.svc.GetGroupLocations(groupID)
+	// [FIX] Use c.Context() here
+	locations, err := h.svc.GetGroupLocations(c.Context(), groupID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}

@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
 	"umrah-backend/internal/entity"
@@ -11,7 +12,7 @@ import (
 	"umrah-backend/internal/middleware"
 	"umrah-backend/internal/repository"
 	"umrah-backend/internal/service"
-	"umrah-backend/pkg/database"
+	"umrah-backend/pkg/database" // Pastikan package ini ada
 
 	jwtware "github.com/gofiber/contrib/jwt"
 	"github.com/gofiber/contrib/websocket"
@@ -20,16 +21,25 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/helmet"
 	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/gofiber/fiber/v2/middleware/recover"
 )
 
 func main() {
+	// 0. Safety Check: Buat folder uploads jika belum ada
+	if err := os.MkdirAll("./uploads", 0755); err != nil {
+		log.Fatal("Failed to create upload directory:", err)
+	}
+
 	// 1. Connect DB & Redis
 	db := database.ConnectPostgres()
 	redisClient := database.ConnectRedis()
 
-	// 2. Auto Migrate (All Tables)
+	// 2. Auto Migrate (Urutan diperbaiki agar relasi aman)
+	log.Println("Migrating database...")
 	db.AutoMigrate(
 		&entity.User{},
+		&entity.TravelPackage{}, // Package dulu baru Booking
+		&entity.Booking{},
 		&entity.Group{},
 		&entity.GroupMember{},
 		&entity.Message{},
@@ -37,9 +47,6 @@ func main() {
 		&entity.Attendance{},
 		&entity.Product{},
 		&entity.Order{},
-		// [NEW]
-		&entity.TravelPackage{},
-		&entity.Booking{},
 		&entity.Manasik{},
 	)
 
@@ -49,7 +56,6 @@ func main() {
 	chatRepo := repository.NewChatRepository(db)
 	itineraryRepo := repository.NewItineraryRepository(db)
 	commerceRepo := repository.NewCommerceRepository(db)
-	// [NEW]
 	pkgRepo := repository.NewPackageRepository(db)
 	manasikRepo := repository.NewManasikRepository(db)
 
@@ -60,7 +66,6 @@ func main() {
 	chatSvc := service.NewChatService(chatRepo, redisClient)
 	itinerarySvc := service.NewItineraryService(itineraryRepo)
 	commerceSvc := service.NewCommerceService(commerceRepo)
-	// [NEW]
 	pkgSvc := service.NewPackageService(pkgRepo)
 	manasikSvc := service.NewManasikService(manasikRepo)
 
@@ -71,73 +76,79 @@ func main() {
 	chatHandler := handler.NewChatHandler(chatSvc, groupRepo)
 	itineraryHandler := handler.NewItineraryHandler(itinerarySvc)
 	commerceHandler := handler.NewCommerceHandler(commerceSvc)
-	// [NEW]
 	pkgHandler := handler.NewPackageHandler(pkgSvc)
 	manasikHandler := handler.NewManasikHandler(manasikSvc)
 
 	// 6. Setup Fiber
-	app := fiber.New()
+	app := fiber.New(fiber.Config{
+		BodyLimit: 10 * 1024 * 1024, // Limit upload 10MB
+	})
 
-	app.Use(logger.New(logger.Config{
-		Format:     `{"time":"${time}","status":${status},"method":"${method}","path":"${path}"}` + "\n",
-		TimeFormat: "2006-01-02 15:04:05",
-	}))
+	// Global Middlewares
+	app.Use(recover.New()) // Anti Crash
+	app.Use(logger.New())
 	app.Use(helmet.New())
-	app.Use(cors.New())
-	app.Use(limiter.New(limiter.Config{Max: 100, Expiration: 1 * time.Minute}))
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: "*", // Ganti dengan domain frontend nanti
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
+	}))
+	app.Use(limiter.New(limiter.Config{
+		Max:        100,
+		Expiration: 1 * time.Minute,
+	}))
 
+	// Serve Static Files (Images)
 	app.Static("/uploads", "./uploads")
 
+	// --- ROUTING ---
 	api := app.Group("/api")
 
-	// Public Routes
+	// A. PUBLIC ROUTES
 	api.Post("/register", authHandler.Register)
 	api.Post("/login", authHandler.Login)
+	api.Get("/packages", pkgHandler.GetList) // Katalog Publik
+	api.Get("/manasik", manasikHandler.GetList)
 
-	// Public Catalog (Can be accessed without login if desired, or move to protected)
-	api.Get("/packages", pkgHandler.GetList)
+	// B. PROTECTED ROUTES (User Logged In)
+	// Menggunakan Middleware custom yang kita buat sebelumnya
+	api.Use(middleware.Protected())                     // Cek Token Signature
+	api.Use(middleware.CheckSingleSession(redisClient)) // Cek Redis Session
 
-	// --- PROTECTED ROUTES ---
-	api.Use(jwtware.New(jwtware.Config{
-		SigningKey: jwtware.SigningKey{Key: []byte(os.Getenv("JWT_SECRET"))},
-	}))
-	api.Use(middleware.CheckSingleSession(redisClient))
-
-	// Group
-	api.Post("/groups", groupHandler.Create)
+	// 1. Group & Member
 	api.Post("/groups/join", groupHandler.Join)
 	api.Get("/groups/:id/members", groupHandler.GetMembers)
 
-	// Chat
+	// 2. Chat (History & Delete)
 	api.Get("/groups/:group_id/chat", chatHandler.GetHistory)
 	api.Delete("/groups/:group_id/chat/:message_id", chatHandler.DeleteMessage)
 
-	// Tracking
-	api.Get("/groups/:group_id/locations", trackingHandler.GetLocations)
+	// 3. Tracking
+	api.Get("/groups/:group_id/locations", trackingHandler.GetLocations) // Snapshot API
 
-	// Itinerary & Attendance
-	api.Post("/itineraries", itineraryHandler.Create)
+	// 4. Itinerary & Attendance
 	api.Get("/groups/:group_id/rundown", itineraryHandler.GetRundown)
-	api.Post("/attendance/scan", itineraryHandler.Scan)
-	api.Get("/itineraries/:id/attendance", itineraryHandler.GetReport)
+	api.Post("/attendance/scan", itineraryHandler.Scan) // Jamaah Scan QR
 
-	// Commerce (Roaming)
-	api.Post("/products", commerceHandler.CreateProduct)
+	// 5. Commerce (User Side)
 	api.Get("/products", commerceHandler.GetCatalog)
 	api.Post("/orders", commerceHandler.CreateOrder)
 	api.Get("/orders/my", commerceHandler.GetMyOrders)
 	api.Post("/orders/:id/proof", commerceHandler.UploadProof)
-	api.Patch("/orders/:id/verify", commerceHandler.VerifyOrder)
-
-	// [NEW] Travel Packages & Booking
-	api.Post("/packages", pkgHandler.Create) // Admin only check inside handler ideally
 	api.Post("/bookings", pkgHandler.Book)
 
-	// [NEW] Manasik
-	api.Post("/manasik", manasikHandler.Create) // Admin only
-	api.Get("/manasik", manasikHandler.GetList)
+	// C. ADMIN / MUTAWWIF ROUTES (RBAC)
+	// Kita buat group khusus admin agar lebih aman
+	admin := api.Group("/admin", middleware.AuthorizeRole("ADMIN", "MUTAWWIF"))
 
-	// WebSocket
+	admin.Post("/groups", groupHandler.Create)
+	admin.Post("/packages", pkgHandler.Create)
+	admin.Post("/products", commerceHandler.CreateProduct)
+	admin.Post("/manasik", manasikHandler.Create)
+	admin.Post("/itineraries", itineraryHandler.Create)
+	admin.Get("/itineraries/:id/attendance", itineraryHandler.GetReport)
+	admin.Patch("/orders/:id/verify", commerceHandler.VerifyOrder)
+
+	// --- WEBSOCKET ROUTE ---
 	app.Use("/ws", func(c *fiber.Ctx) error {
 		if websocket.IsWebSocketUpgrade(c) {
 			c.Locals("allowed", true)
@@ -145,6 +156,8 @@ func main() {
 		}
 		return fiber.ErrUpgradeRequired
 	})
+
+	// WebSocket Auth (Token lewat Query Param: ws://...?token=xyz)
 	app.Use("/ws", jwtware.New(jwtware.Config{
 		SigningKey:  jwtware.SigningKey{Key: []byte(os.Getenv("JWT_SECRET"))},
 		TokenLookup: "query:token",
@@ -153,15 +166,17 @@ func main() {
 	app.Get("/ws/tracking/:group_id", websocket.New(trackingHandler.StreamLocation))
 	app.Get("/ws/chat/:group_id", websocket.New(chatHandler.StreamChat))
 
+	// 7. Graceful Shutdown
 	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+
 	go func() {
-		_ = <-c
-		log.Println("Shutting down...")
+		<-c
+		log.Println("Gracefully shutting down...")
 		_ = app.Shutdown()
 	}()
 
-	log.Println("Server running on :3000")
+	log.Println("Server running on port :3000")
 	if err := app.Listen(":3000"); err != nil {
 		log.Panic(err)
 	}

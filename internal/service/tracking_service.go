@@ -10,7 +10,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Struct response untuk Frontend
 type LocationData struct {
 	UserID    string  `json:"user_id"`
 	FullName  string  `json:"full_name,omitempty"`
@@ -21,8 +20,9 @@ type LocationData struct {
 }
 
 type TrackingService interface {
-	UpdateLocation(groupID string, data LocationData) error
-	GetGroupLocations(groupID string) ([]LocationData, error)
+	// [FIX] Add Context
+	UpdateLocation(ctx context.Context, groupID string, data LocationData) error
+	GetGroupLocations(ctx context.Context, groupID string) ([]LocationData, error)
 }
 
 type trackingService struct {
@@ -37,11 +37,10 @@ func NewTrackingService(redis *redis.Client, userRepo repository.UserRepository)
 	}
 }
 
-func (s *trackingService) UpdateLocation(groupID string, data LocationData) error {
-	ctx := context.Background()
+func (s *trackingService) UpdateLocation(ctx context.Context, groupID string, data LocationData) error {
+	// [FIX] Remove context.Background(), use ctx
 	key := fmt.Sprintf("group:%s:locations", groupID)
 
-	// Simpan data lokasi ke Redis Hash
 	jsonData, _ := json.Marshal(data)
 
 	pipe := s.redis.Pipeline()
@@ -52,11 +51,10 @@ func (s *trackingService) UpdateLocation(groupID string, data LocationData) erro
 	return err
 }
 
-func (s *trackingService) GetGroupLocations(groupID string) ([]LocationData, error) {
-	ctx := context.Background()
+func (s *trackingService) GetGroupLocations(ctx context.Context, groupID string) ([]LocationData, error) {
+	// [FIX] Use ctx
 	key := fmt.Sprintf("group:%s:locations", groupID)
 
-	// 1. Ambil data mentah dari Redis
 	result, err := s.redis.HGetAll(ctx, key).Result()
 	if err != nil {
 		return nil, err
@@ -65,7 +63,6 @@ func (s *trackingService) GetGroupLocations(groupID string) ([]LocationData, err
 	var locations []LocationData
 	var userIDs []string
 
-	// 2. Parse JSON dari Redis & Kumpulkan User ID
 	for _, jsonStr := range result {
 		var loc LocationData
 		if err := json.Unmarshal([]byte(jsonStr), &loc); err == nil {
@@ -78,20 +75,17 @@ func (s *trackingService) GetGroupLocations(groupID string) ([]LocationData, err
 		return locations, nil
 	}
 
-	// 3. Ambil Nama User dari Postgres (Pakai struct UserLite)
-	usersLite, err := s.userRepo.FindByIDs(userIDs)
+	// [FIX] Pass ctx to repo
+	usersLite, err := s.userRepo.FindByIDs(ctx, userIDs)
 	if err != nil {
-		return locations, nil // Return lokasi saja jika DB error
+		return locations, nil
 	}
 
-	// 4. Buat Map untuk pencarian cepat (ID -> UserLite)
-	// Ini menggantikan variabel 'userMap' yang tadi error
 	userInfoMap := make(map[string]repository.UserLite)
 	for _, u := range usersLite {
 		userInfoMap[u.ID] = u
 	}
 
-	// 5. Gabungkan Data (Lokasi + Nama + Role)
 	for i, loc := range locations {
 		if user, found := userInfoMap[loc.UserID]; found {
 			locations[i].FullName = user.FullName

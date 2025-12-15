@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors" // [FIX] Wajib import errors
 	"umrah-backend/internal/entity"
 
 	"gorm.io/gorm"
@@ -13,7 +14,8 @@ type PackageRepository interface {
 	FindPackageByID(ctx context.Context, id string) (*entity.TravelPackage, error)
 
 	CreateBooking(ctx context.Context, booking *entity.Booking) error
-	UpdatePackageQuota(ctx context.Context, pkg *entity.TravelPackage) error
+	// Method ini ada di interface, jadi WAJIB diimplementasikan di bawah
+	DecreaseQuota(ctx context.Context, packageID string, count int) error
 }
 
 type packageRepo struct {
@@ -50,6 +52,23 @@ func (r *packageRepo) CreateBooking(ctx context.Context, booking *entity.Booking
 	return r.db.WithContext(ctx).Create(booking).Error
 }
 
-func (r *packageRepo) UpdatePackageQuota(ctx context.Context, pkg *entity.TravelPackage) error {
-	return r.db.WithContext(ctx).Save(pkg).Error
+// [FIX] INI IMPLEMENTASI YANG HILANG
+func (r *packageRepo) DecreaseQuota(ctx context.Context, packageID string, count int) error {
+	// Menggunakan gorm.Expr untuk Atomic Update (Thread Safe)
+	// Query: UPDATE travel_packages SET available = available - count WHERE id = ? AND available >= count
+	result := r.db.WithContext(ctx).
+		Model(&entity.TravelPackage{}).
+		Where("id = ? AND available >= ?", packageID, count).
+		Update("available", gorm.Expr("available - ?", count))
+
+	if result.Error != nil {
+		return result.Error
+	}
+
+	// Jika RowsAffected == 0, artinya ID salah ATAU kuota tidak cukup (available < count)
+	if result.RowsAffected == 0 {
+		return errors.New("quota insufficient or package not found")
+	}
+
+	return nil
 }
