@@ -7,6 +7,14 @@ import (
 	"gorm.io/gorm"
 )
 
+// --- [NEW] ROLE CONSTANTS ---
+// Using constants prevents typos in your code logic
+const (
+	RoleAdmin    = "ADMIN"    // Travel Agent Staff
+	RoleMutawwif = "MUTAWWIF" // Tour Leader
+	RoleJamaah   = "JAMAAH"   // Pilgrim
+)
+
 // DATABASE MODEL
 type User struct {
 	ID          uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
@@ -25,7 +33,9 @@ type RegisterDTO struct {
 	FullName    string `json:"full_name" validate:"required,min=3"`
 	PhoneNumber string `json:"phone_number" validate:"required,min=9"`
 	Password    string `json:"password" validate:"required,min=6"`
-	Role        string `json:"role" validate:"required,oneof=JAMAAH MUTAWWIF"`
+
+	// [UPDATE] Added ADMIN to the allowed roles list
+	Role string `json:"role" validate:"required,oneof=JAMAAH MUTAWWIF ADMIN"`
 }
 
 type LoginDTO struct {

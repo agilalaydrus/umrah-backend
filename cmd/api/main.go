@@ -8,7 +8,7 @@ import (
 
 	"umrah-backend/internal/entity"
 	"umrah-backend/internal/handler"
-	"umrah-backend/internal/middleware" // [NEW] Import Middleware Package
+	"umrah-backend/internal/middleware"
 	"umrah-backend/internal/repository"
 	"umrah-backend/internal/service"
 	"umrah-backend/pkg/database"
@@ -23,88 +23,121 @@ import (
 )
 
 func main() {
-	// 1. Connect DB (Pooled) & Redis
+	// 1. Connect DB & Redis
 	db := database.ConnectPostgres()
 	redisClient := database.ConnectRedis()
 
-	// Migrations
-	db.AutoMigrate(&entity.User{}, &entity.Group{}, &entity.GroupMember{}, &entity.Message{})
+	// 2. Auto Migrate (All Tables)
+	db.AutoMigrate(
+		&entity.User{},
+		&entity.Group{},
+		&entity.GroupMember{},
+		&entity.Message{},
+		&entity.Itinerary{},
+		&entity.Attendance{},
+		&entity.Product{},
+		&entity.Order{},
+		// [NEW]
+		&entity.TravelPackage{},
+		&entity.Booking{},
+		&entity.Manasik{},
+	)
 
-	// 2. Dependencies
+	// 3. Initialize Repositories
 	userRepo := repository.NewUserRepository(db)
 	groupRepo := repository.NewGroupRepository(db)
 	chatRepo := repository.NewChatRepository(db)
+	itineraryRepo := repository.NewItineraryRepository(db)
+	commerceRepo := repository.NewCommerceRepository(db)
+	// [NEW]
+	pkgRepo := repository.NewPackageRepository(db)
+	manasikRepo := repository.NewManasikRepository(db)
 
-	// [UPDATE] Auth Service now gets Redis Client
+	// 4. Initialize Services
 	authSvc := service.NewAuthService(userRepo, redisClient)
-
 	groupSvc := service.NewGroupService(groupRepo)
 	trackingSvc := service.NewTrackingService(redisClient, userRepo)
 	chatSvc := service.NewChatService(chatRepo, redisClient)
+	itinerarySvc := service.NewItineraryService(itineraryRepo)
+	commerceSvc := service.NewCommerceService(commerceRepo)
+	// [NEW]
+	pkgSvc := service.NewPackageService(pkgRepo)
+	manasikSvc := service.NewManasikService(manasikRepo)
 
+	// 5. Initialize Handlers
 	authHandler := handler.NewAuthHandler(authSvc)
 	groupHandler := handler.NewGroupHandler(groupSvc)
 	trackingHandler := handler.NewTrackingHandler(trackingSvc)
-
-	// [CRITICAL] Inject groupRepo into ChatHandler for Security Check
 	chatHandler := handler.NewChatHandler(chatSvc, groupRepo)
+	itineraryHandler := handler.NewItineraryHandler(itinerarySvc)
+	commerceHandler := handler.NewCommerceHandler(commerceSvc)
+	// [NEW]
+	pkgHandler := handler.NewPackageHandler(pkgSvc)
+	manasikHandler := handler.NewManasikHandler(manasikSvc)
 
-	// 3. Fiber Setup (Production Ready)
+	// 6. Setup Fiber
 	app := fiber.New()
 
-	// A. JSON Logger
 	app.Use(logger.New(logger.Config{
-		Format:     `{"time":"${time}","status":${status},"latency":"${latency}","method":"${method}","path":"${path}","error":"${error}"}` + "\n",
+		Format:     `{"time":"${time}","status":${status},"method":"${method}","path":"${path}"}` + "\n",
 		TimeFormat: "2006-01-02 15:04:05",
-		TimeZone:   "Asia/Jakarta",
 	}))
-
-	// B. Security Headers
 	app.Use(helmet.New())
-
-	// C. Rate Limiting (Prevent DDoS / Abuse)
-	app.Use(limiter.New(limiter.Config{
-		Max:        100,             // 100 requests
-		Expiration: 1 * time.Minute, // per 1 minute
-		LimitReached: func(c *fiber.Ctx) error {
-			return c.Status(429).JSON(fiber.Map{"error": "Too many requests"})
-		},
-	}))
-
-	// D. CORS
 	app.Use(cors.New())
+	app.Use(limiter.New(limiter.Config{Max: 100, Expiration: 1 * time.Minute}))
 
-	// 4. Routes
+	app.Static("/uploads", "./uploads")
+
 	api := app.Group("/api")
 
 	// Public Routes
 	api.Post("/register", authHandler.Register)
 	api.Post("/login", authHandler.Login)
 
-	// --- PROTECTED ROUTES START ---
-	// 1. JWT Verification (Standard)
+	// Public Catalog (Can be accessed without login if desired, or move to protected)
+	api.Get("/packages", pkgHandler.GetList)
+
+	// --- PROTECTED ROUTES ---
 	api.Use(jwtware.New(jwtware.Config{
 		SigningKey: jwtware.SigningKey{Key: []byte(os.Getenv("JWT_SECRET"))},
 	}))
-
-	// 2. [NEW] Single Session Enforcement
-	// Checks if the session ID in the token matches the one in Redis
 	api.Use(middleware.CheckSingleSession(redisClient))
 
-	// Group Routes
+	// Group
 	api.Post("/groups", groupHandler.Create)
 	api.Post("/groups/join", groupHandler.Join)
 	api.Get("/groups/:id/members", groupHandler.GetMembers)
 
-	// Tracking Routes
-	api.Get("/groups/:group_id/locations", trackingHandler.GetLocations)
-
-	// Chat Routes (History & Delete)
+	// Chat
 	api.Get("/groups/:group_id/chat", chatHandler.GetHistory)
 	api.Delete("/groups/:group_id/chat/:message_id", chatHandler.DeleteMessage)
-	// --- PROTECTED ROUTES END ---
 
-	// WebSocket Middleware
+	// Tracking
+	api.Get("/groups/:group_id/locations", trackingHandler.GetLocations)
+
+	// Itinerary & Attendance
+	api.Post("/itineraries", itineraryHandler.Create)
+	api.Get("/groups/:group_id/rundown", itineraryHandler.GetRundown)
+	api.Post("/attendance/scan", itineraryHandler.Scan)
+	api.Get("/itineraries/:id/attendance", itineraryHandler.GetReport)
+
+	// Commerce (Roaming)
+	api.Post("/products", commerceHandler.CreateProduct)
+	api.Get("/products", commerceHandler.GetCatalog)
+	api.Post("/orders", commerceHandler.CreateOrder)
+	api.Get("/orders/my", commerceHandler.GetMyOrders)
+	api.Post("/orders/:id/proof", commerceHandler.UploadProof)
+	api.Patch("/orders/:id/verify", commerceHandler.VerifyOrder)
+
+	// [NEW] Travel Packages & Booking
+	api.Post("/packages", pkgHandler.Create) // Admin only check inside handler ideally
+	api.Post("/bookings", pkgHandler.Book)
+
+	// [NEW] Manasik
+	api.Post("/manasik", manasikHandler.Create) // Admin only
+	api.Get("/manasik", manasikHandler.GetList)
+
+	// WebSocket
 	app.Use("/ws", func(c *fiber.Ctx) error {
 		if websocket.IsWebSocketUpgrade(c) {
 			c.Locals("allowed", true)
@@ -112,26 +145,19 @@ func main() {
 		}
 		return fiber.ErrUpgradeRequired
 	})
-
 	app.Use("/ws", jwtware.New(jwtware.Config{
 		SigningKey:  jwtware.SigningKey{Key: []byte(os.Getenv("JWT_SECRET"))},
 		TokenLookup: "query:token",
 	}))
 
-	// Note: You can also wrap WebSocket routes with Session Check if needed,
-	// but usually handling it at handshake (HTTP Upgrade) is sufficient if wired correctly.
-	// For strictness, you could check session in the Handler's initial connection logic.
-
 	app.Get("/ws/tracking/:group_id", websocket.New(trackingHandler.StreamLocation))
 	app.Get("/ws/chat/:group_id", websocket.New(chatHandler.StreamChat))
 
-	// 5. Graceful Shutdown
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
-
 	go func() {
 		_ = <-c
-		log.Println("Gracefully shutting down...")
+		log.Println("Shutting down...")
 		_ = app.Shutdown()
 	}()
 
