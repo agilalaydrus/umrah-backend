@@ -25,7 +25,8 @@ type User struct {
 
 	// Fitur Reset Password yang Aman
 	ResetToken       *string    `gorm:"size:10" json:"-"`
-	ResetTokenExpiry *time.Time `json:"-"` // Token harus punya expired time
+	ResetTokenExpiry *time.Time `json:"-"`
+	FCMToken         string     `gorm:"type:text" json:"fcm_token"`
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
