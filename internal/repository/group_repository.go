@@ -52,7 +52,6 @@ func (r *groupRepo) GetByID(ctx context.Context, id string) (*entity.Group, erro
 
 func (r *groupRepo) GetMembers(ctx context.Context, groupID string) ([]entity.GroupMember, error) {
 	var members []entity.GroupMember
-	// Preload 'User' agar kita dapat nama membernya
 	err := r.db.WithContext(ctx).
 		Preload("User").
 		Where("group_id = ?", groupID).

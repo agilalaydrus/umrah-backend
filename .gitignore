@@ -1,0 +1,36 @@
+# .gitignore
+
+# 1. Environment Variables (RAHASIA - JANGAN DIHAPUS)
+.env
+.env.local
+firebase-credentials..json
+firebase-credentials.json
+*.json
+nginx/certs/
+
+# 2. Go Build Binaries
+/bin
+/dist
+*.exe
+*.test
+*.out
+umrah-backend
+
+# 3. Dependency Directories (Optional, biasanya di Go kita upload go.sum tapi tidak vendor)
+vendor/
+
+# 4. IDE / Editor Files
+.vscode/
+.idea/
+.DS_Store
+
+# Uploads
+uploads/
+
+# Docker volumes (if any mapped locally)
+postgres_data/
+redis_data/
+
+# Ignore Binary / Build files
+tmp/
+main
